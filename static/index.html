@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CS2 Market Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:        #1C1917;
+  --surface:   #231F1C;
+  --surface2:  #2A2520;
+  --border:    #312C27;
+  --border2:   #3D3630;
+  --text:      #E7E2DC;
+  --text-muted:#8C8079;
+  --text-hint: #4A4240;
+  --accent:    #D4956A;
+  --accent-dim:rgba(212,149,106,0.12);
+  --green:     #7DC98F;
+  --green-dim: rgba(125,201,143,0.12);
+  --red:       #D97B7B;
+  --red-dim:   rgba(217,123,123,0.12);
+  --blue:      #7BAFD4;
+  --blue-dim:  rgba(123,175,212,0.12);
+  --mono: 'Geist Mono', monospace;
+  --sans: 'Geist', sans-serif;
+}
+body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.header { border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; align-items: center; justify-content: space-between; height: 52px; position: sticky; top: 0; background: var(--bg); z-index: 100; }
+.logo { font-family: var(--mono); font-size: 13px; font-weight: 500; letter-spacing: 0.04em; display: flex; align-items: center; gap: 10px; color: var(--text); }
+.logo-badge { background: var(--accent); color: var(--bg); padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: 500; letter-spacing: 0.06em; }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.live-indicator { display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--mono); color: var(--text-muted); }
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.scrape-btn { font-family: var(--mono); font-size: 11px; color: var(--text-muted); background: transparent; border: 1px solid var(--border2); padding: 5px 12px; border-radius: 4px; cursor: pointer; transition: all 0.15s; letter-spacing: 0.03em; }
+.scrape-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.nav { border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; }
+.tab { font-family: var(--mono); font-size: 12px; color: var(--text-muted); padding: 13px 16px; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; letter-spacing: 0.04em; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.page { display: none; padding: 28px 32px; max-width: 1400px; animation: fadein 0.2s ease; }
+.page.active { display: block; }
+@keyframes fadein { from{opacity:0;transform:translateY(3px)} to{opacity:1;transform:translateY(0)} }
+
+.stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 18px 20px; }
+.stat-label { font-family: var(--mono); font-size: 10px; color: var(--text-muted); letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 10px; }
+.stat-value { font-family: var(--mono); font-size: 24px; font-weight: 500; color: var(--text); line-height: 1; }
+.stat-sub { font-size: 11px; color: var(--text-hint); margin-top: 6px; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; margin-bottom: 16px; }
+.panel-header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.panel-title { font-family: var(--mono); font-size: 10px; color: var(--text-muted); letter-spacing: 0.09em; text-transform: uppercase; }
+.panel-body { padding: 20px; }
+
+.chart-wrap { position: relative; height: 220px; }
+
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th { font-family: var(--mono); font-size: 10px; color: var(--text-hint); text-transform: uppercase; letter-spacing: 0.07em; text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--border); font-weight: 400; }
+.data-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: var(--surface2); }
+.mono { font-family: var(--mono); font-size: 12px; }
+
+.badge { display: inline-block; font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 3px; letter-spacing: 0.03em; }
+.cat-new_case        { background: rgba(123,175,212,0.12); color: #7BAFD4; }
+.cat-operation       { background: rgba(212,149,106,0.14); color: #D4956A; }
+.cat-balance_change  { background: rgba(217,123,123,0.12); color: #D97B7B; }
+.cat-major_tournament{ background: rgba(180,140,210,0.12); color: #B48CD2; }
+.cat-map_update      { background: rgba(125,201,143,0.12); color: #7DC98F; }
+.cat-trade_policy    { background: rgba(220,180,90,0.12);  color: #DCC05A; }
+.cat-anticheat_vac   { background: rgba(217,123,123,0.12); color: #D97B7B; }
+.cat-ui_misc         { background: var(--surface2); color: var(--text-muted); }
+
+.signal { font-family: var(--mono); font-size: 11px; font-weight: 500; }
+.signal.STRONG\ BUY  { color: var(--green); }
+.signal.MARGINAL      { color: var(--accent); }
+.signal.NEUTRAL       { color: var(--text-muted); }
+.signal.AVOID         { color: var(--red); }
+
+.update-item { padding: 14px 0; border-bottom: 1px solid var(--border); display: flex; gap: 16px; align-items: flex-start; }
+.update-item:last-child { border-bottom: none; }
+.update-date { font-family: var(--mono); font-size: 11px; color: var(--text-muted); min-width: 82px; margin-top: 2px; }
+.update-body { flex: 1; }
+.update-title { font-size: 13px; color: var(--text); margin-bottom: 6px; line-height: 1.45; }
+.update-cats { display: flex; gap: 5px; flex-wrap: wrap; }
+
+.skin-select { font-family: var(--mono); font-size: 11px; background: var(--surface2); border: 1px solid var(--border2); color: var(--text-muted); padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+.skin-select:focus { outline: none; border-color: var(--accent); color: var(--text); }
+
+.prediction-box { background: var(--surface2); border: 1px solid var(--border2); border-radius: 6px; padding: 20px; }
+.prediction-label { font-family: var(--mono); font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+.prediction-value { font-family: var(--mono); font-size: 30px; font-weight: 500; line-height: 1; }
+.prediction-value.positive { color: var(--green); }
+.prediction-value.negative { color: var(--red); }
+.prediction-value.neutral  { color: var(--text-muted); font-size: 18px; }
+.confidence-bar { height: 3px; background: var(--border); border-radius: 2px; margin-top: 14px; overflow: hidden; }
+.confidence-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.6s ease; }
+
+.empty   { text-align: center; padding: 40px; color: var(--text-hint); font-family: var(--mono); font-size: 12px; }
+.loading { text-align: center; padding: 50px; color: var(--text-hint); font-family: var(--mono); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">CS2 MARKET INTEL <span class="logo-badge">LIVE</span></div>
+  <div class="header-right">
+    <div class="live-indicator"><div class="live-dot"></div><span id="last-updated">connecting...</span></div>
+    <button class="scrape-btn" onclick="triggerScrape()">↻ scrape now</button>
+  </div>
+</div>
+
+<div class="nav">
+  <div class="tab active" onclick="showTab('overview',this)">Overview</div>
+  <div class="tab" onclick="showTab('prices',this)">Prices</div>
+  <div class="tab" onclick="showTab('updates',this)">Updates</div>
+  <div class="tab" onclick="showTab('spreads',this)">Spreads</div>
+  <div class="tab" onclick="showTab('correlations',this)">Correlations</div>
+</div>
+
+<div class="page active" id="tab-overview">
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-label">Updates Tracked</div><div class="stat-value" id="stat-updates">—</div><div class="stat-sub">since 2020</div></div>
+    <div class="stat-card"><div class="stat-label">Price Snapshots</div><div class="stat-value" id="stat-snapshots">—</div><div class="stat-sub">20 skins tracked</div></div>
+    <div class="stat-card"><div class="stat-label">History Since</div><div class="stat-value" id="stat-since" style="font-size:15px;padding-top:5px;">—</div><div class="stat-sub">oldest update</div></div>
+    <div class="stat-card"><div class="stat-label">Strong Buy Signals</div><div class="stat-value" id="stat-signals">—</div><div class="stat-sub">current opportunities</div></div>
+  </div>
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Update Categories</span></div>
+      <div class="panel-body"><div class="chart-wrap"><canvas id="cat-chart"></canvas></div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Recent Updates</span></div>
+      <div class="panel-body" id="latest-updates-list" style="padding:0 20px;max-height:280px;overflow-y:auto;"><div class="loading">loading...</div></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-header"><span class="panel-title">Current Prices</span></div>
+    <div class="panel-body" style="padding:0;">
+      <table class="data-table" id="overview-price-table">
+        <thead><tr><th>Skin</th><th>Steam Low</th><th>Steam Median</th><th>Volume</th></tr></thead>
+        <tbody><tr><td colspan="4" class="loading">loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="tab-prices">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Price History</span>
+      <select class="skin-select" id="skin-select" onchange="renderPriceChart()"><option>Loading...</option></select>
+    </div>
+    <div class="panel-body"><div class="chart-wrap" style="height:300px;"><canvas id="price-chart"></canvas></div></div>
+  </div>
+  <div class="panel">
+    <div class="panel-header"><span class="panel-title">All Tracked Skins</span></div>
+    <div class="panel-body" style="padding:0;">
+      <table class="data-table" id="all-prices-table">
+        <thead><tr><th>Skin</th><th>Steam Low</th><th>Steam Median</th><th>Skinport</th><th>Volume</th></tr></thead>
+        <tbody><tr><td colspan="5" class="loading">loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="tab-updates">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Update Log</span>
+      <select class="skin-select" id="cat-filter" onchange="renderUpdates()">
+        <option value="">All Categories</option>
+        <option value="new_case">New Case</option>
+        <option value="operation">Operation</option>
+        <option value="balance_change">Balance Change</option>
+        <option value="major_tournament">Major Tournament</option>
+        <option value="map_update">Map Update</option>
+        <option value="trade_policy">Trade Policy</option>
+        <option value="anticheat_vac">Anti-Cheat</option>
+        <option value="ui_misc">UI / Misc</option>
+      </select>
+    </div>
+    <div class="panel-body" id="updates-list" style="padding:0 20px;"><div class="loading">loading...</div></div>
+  </div>
+</div>
+
+<div class="page" id="tab-spreads">
+  <div class="panel">
+    <div class="panel-header"><span class="panel-title">Cross-Platform Spread Analysis</span></div>
+    <div class="panel-body" style="padding:0;">
+      <table class="data-table" id="spreads-table">
+        <thead><tr><th>Skin</th><th>Steam Buy</th><th>Skinport Buy</th><th>Best Profit</th><th>Signal</th></tr></thead>
+        <tbody><tr><td colspan="5" class="loading">loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="tab-correlations">
+  <div class="panel">
+    <div class="panel-header"><span class="panel-title">Update Type → Avg Price Impact</span></div>
+    <div class="panel-body"><div class="chart-wrap" style="height:260px;"><canvas id="corr-chart"></canvas></div></div>
+  </div>
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Latest Update Prediction</span></div>
+      <div class="panel-body" id="prediction-panel"><div class="loading">loading...</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">By Category</span></div>
+      <div class="panel-body" style="padding:0;">
+        <table class="data-table" id="corr-table">
+          <thead><tr><th>Category</th><th>Events</th><th>Avg Impact</th><th>Range</th></tr></thead>
+          <tbody><tr><td colspan="4" class="loading">loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let DATA=null,CORR=null,SPREADS=null,priceChart=null,catChart=null,corrChart=null;
+const CAT_LABELS={new_case:'New Case',operation:'Operation',balance_change:'Balance Change',major_tournament:'Major',map_update:'Map Update',trade_policy:'Trade Policy',anticheat_vac:'Anti-Cheat',ui_misc:'UI / Misc'};
+const CAT_COLORS={new_case:'#7BAFD4',operation:'#D4956A',balance_change:'#D97B7B',major_tournament:'#B48CD2',map_update:'#7DC98F',trade_policy:'#DCC05A',anticheat_vac:'#D97B7B',ui_misc:'#4A4240'};
+
+async function loadAll() {
+  try {
+    const [d,c,s] = await Promise.all([fetch(`${API}/api/data`).then(r=>r.json()),fetch(`${API}/api/correlations`).then(r=>r.json()),fetch(`${API}/api/spreads`).then(r=>r.json())]);
+    DATA=d; CORR=c; SPREADS=s;
+    document.getElementById('last-updated').textContent='updated '+new Date().toLocaleTimeString();
+    renderAll();
+  } catch(e) { document.getElementById('last-updated').textContent='connection error'; }
+}
+
+function renderAll() { renderStats();renderCatChart();renderLatestUpdates();renderOverviewPrices();renderSkinSelect();renderPriceChart();renderAllPrices();renderUpdates();renderSpreads();renderCorrelations();renderPrediction(); }
+
+function renderStats() {
+  document.getElementById('stat-updates').textContent=(DATA.meta?.total_updates||0).toLocaleString();
+  document.getElementById('stat-snapshots').textContent=(DATA.meta?.total_snapshots||0).toLocaleString();
+  document.getElementById('stat-since').textContent=DATA.updates?.slice(-1)[0]?.date||'—';
+  document.getElementById('stat-signals').textContent=SPREADS?.spreads?.filter(s=>s.signal==='STRONG BUY').length||0;
+}
+
+function renderCatChart() {
+  const cats=DATA.category_stats||{};const keys=Object.keys(cats);
+  const ctx=document.getElementById('cat-chart').getContext('2d');
+  if(catChart)catChart.destroy();
+  catChart=new Chart(ctx,{type:'doughnut',data:{labels:keys.map(k=>CAT_LABELS[k]||k),datasets:[{data:Object.values(cats),backgroundColor:keys.map(k=>CAT_COLORS[k]||'#4A4240'),borderWidth:0,hoverOffset:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:'#8C8079',font:{family:'Geist Mono',size:11},padding:10,boxWidth:10}}}}});
+}
+
+function renderLatestUpdates() {
+  const updates=(DATA.updates||[]).slice(0,8);
+  const el=document.getElementById('latest-updates-list');
+  if(!updates.length){el.innerHTML='<div class="empty">no updates</div>';return;}
+  el.innerHTML=updates.map(u=>`<div class="update-item"><div class="update-date">${u.date}</div><div class="update-body"><div class="update-title">${u.title}</div><div class="update-cats">${(u.categories||[]).map(c=>`<span class="badge cat-${c}">${CAT_LABELS[c]||c}</span>`).join('')}</div></div></div>`).join('');
+}
+
+function renderOverviewPrices() {
+  const prices=DATA.latest_prices||{};const skins=Object.keys(prices).slice(0,10);
+  const tbody=document.querySelector('#overview-price-table tbody');
+  if(!skins.length){tbody.innerHTML='<tr><td colspan="4" class="empty">no price data — trigger a scrape</td></tr>';return;}
+  tbody.innerHTML=skins.map(skin=>{const p=prices[skin];return`<tr><td>${skin}</td><td class="mono">${p.lowest_price?'$'+p.lowest_price.toFixed(2):'—'}</td><td class="mono">${p.median_price?'$'+p.median_price.toFixed(2):'—'}</td><td class="mono" style="color:var(--text-muted)">${p.volume||'—'}</td></tr>`;}).join('');
+}
+
+function renderSkinSelect() {
+  const skins=Object.keys(DATA.price_history||{});
+  document.getElementById('skin-select').innerHTML=skins.map(s=>`<option value="${s}">${s}</option>`).join('');
+}
+
+function renderPriceChart() {
+  const skin=document.getElementById('skin-select')?.value;
+  if(!skin||!DATA)return;
+  const history=(DATA.price_history||{})[skin]||[];
+  const ctx=document.getElementById('price-chart').getContext('2d');
+  if(priceChart)priceChart.destroy();
+  priceChart=new Chart(ctx,{type:'line',data:{labels:history.map(h=>h.date),datasets:[{label:'Lowest',data:history.map(h=>h.low),borderColor:'#D4956A',backgroundColor:'rgba(212,149,106,0.08)',borderWidth:2,pointRadius:0,tension:0.3,fill:true},{label:'Median',data:history.map(h=>h.med),borderColor:'#7BAFD4',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,tension:0.3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#8C8079',font:{family:'Geist Mono',size:11},boxWidth:10}}},scales:{x:{ticks:{color:'#4A4240',font:{family:'Geist Mono',size:10},maxTicksLimit:8},grid:{color:'#312C27'}},y:{ticks:{color:'#4A4240',font:{family:'Geist Mono',size:10},callback:v=>'$'+v},grid:{color:'#312C27'}}}}});
+}
+
+function renderAllPrices() {
+  const prices=DATA.latest_prices||{};const spMap={};(SPREADS?.spreads||[]).forEach(s=>spMap[s.skin]=s);
+  const tbody=document.querySelector('#all-prices-table tbody');const skins=Object.keys(prices);
+  if(!skins.length){tbody.innerHTML='<tr><td colspan="5" class="empty">no price data yet</td></tr>';return;}
+  tbody.innerHTML=skins.map(skin=>{const p=prices[skin],sp=spMap[skin];return`<tr><td>${skin}</td><td class="mono">${p.lowest_price?'$'+p.lowest_price.toFixed(2):'—'}</td><td class="mono">${p.median_price?'$'+p.median_price.toFixed(2):'—'}</td><td class="mono">${sp?.sp_buy?'$'+sp.sp_buy.toFixed(2):'—'}</td><td class="mono" style="color:var(--text-muted)">${p.volume||'—'}</td></tr>`;}).join('');
+}
+
+function renderUpdates() {
+  const cat=document.getElementById('cat-filter')?.value||'';
+  let updates=DATA.updates||[];if(cat)updates=updates.filter(u=>u.categories.includes(cat));
+  const el=document.getElementById('updates-list');
+  if(!updates.length){el.innerHTML='<div class="empty">no updates found</div>';return;}
+  el.innerHTML=updates.slice(0,60).map(u=>`<div class="update-item"><div class="update-date">${u.date}</div><div class="update-body"><div class="update-title">${u.title}</div><div class="update-cats" style="margin-top:6px;">${(u.categories||[]).map(c=>`<span class="badge cat-${c}">${CAT_LABELS[c]||c}</span>`).join('')}${(u.weapons||[]).slice(0,3).map(w=>`<span class="badge cat-ui_misc">${w}</span>`).join('')}</div></div></div>`).join('');
+}
+
+function renderSpreads() {
+  const spreads=SPREADS?.spreads||[];const tbody=document.querySelector('#spreads-table tbody');
+  if(!spreads.length){tbody.innerHTML='<tr><td colspan="5" class="empty">no spread data — trigger a scrape</td></tr>';return;}
+  tbody.innerHTML=spreads.map(s=>{const pc=s.best_profit>0?'var(--green)':s.best_profit<0?'var(--red)':'var(--text-muted)';return`<tr><td>${s.skin}</td><td class="mono">${s.steam_buy?'$'+s.steam_buy.toFixed(2):'—'}</td><td class="mono">${s.sp_buy?'$'+s.sp_buy.toFixed(2):'—'}</td><td class="mono" style="color:${pc}">${s.best_profit!=null?(s.best_profit>0?'+':'')+'$'+s.best_profit.toFixed(2):'—'}</td><td><span class="signal ${s.signal}">${s.signal||'—'}</span></td></tr>`;}).join('');
+}
+
+function renderCorrelations() {
+  const byCat=CORR?.by_category||{};const cats=Object.keys(byCat);
+  const ctx=document.getElementById('corr-chart').getContext('2d');
+  if(corrChart)corrChart.destroy();
+  if(!cats.length){ctx.canvas.parentElement.innerHTML='<div class="empty">not enough historical data yet</div>';renderCorrTable(byCat);return;}
+  const means=cats.map(c=>byCat[c].mean);
+  corrChart=new Chart(ctx,{type:'bar',data:{labels:cats.map(c=>CAT_LABELS[c]||c),datasets:[{label:'Avg Impact (%)',data:means,backgroundColor:means.map(v=>v>0?'rgba(125,201,143,0.6)':'rgba(217,123,123,0.6)'),borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#8C8079',font:{family:'Geist Mono',size:10}},grid:{display:false}},y:{ticks:{color:'#4A4240',font:{family:'Geist Mono',size:10},callback:v=>v+'%'},grid:{color:'#312C27'}}}}});
+  renderCorrTable(byCat);
+}
+
+function renderCorrTable(byCat) {
+  const tbody=document.querySelector('#corr-table tbody');const cats=Object.keys(byCat);
+  if(!cats.length){tbody.innerHTML='<tr><td colspan="4" class="empty">insufficient data</td></tr>';return;}
+  tbody.innerHTML=cats.map(cat=>{const d=byCat[cat];const c=d.mean>0?'var(--green)':d.mean<0?'var(--red)':'var(--text-muted)';return`<tr><td><span class="badge cat-${cat}">${CAT_LABELS[cat]||cat}</span></td><td class="mono">${d.count}</td><td class="mono" style="color:${c}">${d.mean>0?'+':''}${d.mean}%</td><td class="mono" style="color:var(--text-muted)">${d.min}% / ${d.max}%</td></tr>`;}).join('');
+}
+
+function renderPrediction() {
+  const el=document.getElementById('prediction-panel');const latest=(DATA.updates||[])[0];const byCat=CORR?.by_category||{};
+  if(!latest){el.innerHTML='<div class="empty">no updates found</div>';return;}
+  const cats=latest.categories||[];const impacts=cats.filter(c=>byCat[c]).map(c=>byCat[c].mean);
+  const avg=impacts.length?impacts.reduce((a,b)=>a+b,0)/impacts.length:null;
+  const conf=Math.min(92,35+(CORR?.total||0)*2);
+  const vc=avg==null?'neutral':avg>0?'positive':'negative';
+  el.innerHTML=`<div style="margin-bottom:16px;"><div class="prediction-label">Latest Update</div><div style="font-size:13px;color:var(--text);line-height:1.45;margin-bottom:8px;">${latest.title}</div><div>${cats.map(c=>`<span class="badge cat-${c}" style="margin-right:4px;">${CAT_LABELS[c]||c}</span>`).join('')}</div></div><div class="prediction-box"><div class="prediction-label">Expected Market Impact</div><div class="prediction-value ${vc}">${avg==null?'insufficient data':(avg>0?'+':'')+avg.toFixed(1)+'%'}</div><div class="confidence-bar"><div class="confidence-fill" style="width:${avg!=null?conf:0}%"></div></div><div style="margin-top:10px;font-family:var(--mono);font-size:11px;color:var(--text-muted);">confidence ${avg!=null?conf+'%':'—'} · ${CORR?.total||0} historical events</div></div>`;
+}
+
+function showTab(tab,el) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  el.classList.add('active');
+}
+
+async function triggerScrape() {
+  const btn=document.querySelector('.scrape-btn');btn.textContent='↻ scraping...';btn.style.color='var(--accent)';
+  try { await fetch(`${API}/api/scrape`,{method:'POST'});setTimeout(()=>{loadAll();btn.textContent='↻ scrape now';btn.style.color='';},45000); }
+  catch(e){btn.textContent='↻ scrape now';btn.style.color='';}
+}
+
+loadAll();
+setInterval(loadAll,300000);
+</script>
+</body>
+</html>

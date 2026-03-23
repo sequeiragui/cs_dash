@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
-
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from scraper import (
     cmd_scrape, cmd_backfill, get_status, get_export_data,
     init_db, get_db, TRACKED_SKINS,
@@ -69,6 +70,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -80,7 +82,9 @@ app.add_middleware(
 
 
 # ── ROUTES ─────────────────────────────────────────────────────────────────
-
+@app.get("/ui")
+async def serve_ui():
+    return FileResponse("static/index.html")
 @app.get("/")
 def root():
     return {"service": "CS2 Market Intelligence", "version": "1.0.0",
