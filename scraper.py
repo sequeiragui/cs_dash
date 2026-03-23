@@ -5,7 +5,6 @@ Importable scraper functions for use by FastAPI + APScheduler.
 Also runnable standalone: python scraper.py [--backfill|--status|--export]
 """
 import os
-
 import re
 import sys
 import json
@@ -57,7 +56,8 @@ SKINPORT_FEE = 0.13
 # Get it from your browser: open Steam Community Market while logged in,
 # DevTools → Application → Cookies → steamLoginSecure
 # Set via env var or paste here
-STEAM_COOKIE = os.environ.get("STEAM_COOKIE", "")
+from urllib.parse import unquote
+STEAM_COOKIE = unquote(os.environ.get("STEAM_COOKIE", ""))
 
 CATEGORY_RULES = [
     ("new_case",         ["new case", "case release", "introducing the", "case is now", "case has been"]),
