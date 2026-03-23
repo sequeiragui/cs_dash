@@ -1,7 +1,7 @@
 """
 CS2 Market Intelligence — FastAPI Backend
 ===========================================
-Serves API endpoints and runs the scraper on a schedule.
+Serves API endpoints. No automatic scheduling — scrape manually via POST /api/scrape.
 
     uvicorn main:app --host 0.0.0.0 --port 8000
 """
@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from scraper import (
@@ -24,45 +23,19 @@ import json
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("cs2intel")
 
-# ── SCHEDULER ──────────────────────────────────────────────────────────────
-
-scheduler = BackgroundScheduler()
-
-
-def scheduled_scrape():
-    logger.info("Scheduled scrape starting...")
-    try:
-        cmd_scrape()
-        logger.info("Scheduled scrape complete")
-    except Exception as e:
-        logger.error(f"Scheduled scrape failed: {e}")
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     logger.info("Initializing database...")
     init_db()
-
-    # Check if we have any updates — if not, suggest backfill
     status = get_status()
     if status["updates"] == 0:
         logger.warning("Database is empty. Run backfill: POST /api/backfill")
-
-    # Start scheduler — scrape every 6 hours
-    scheduler.add_job(scheduled_scrape, "interval", hours=6, id="scrape",
-                      next_run_time=None)  # don't run immediately on start
-    scheduler.start()
-    logger.info("Scheduler started (scraping every 6 hours)")
-
+    else:
+        logger.info(f"DB ready: {status['updates']} updates, {status['price_snapshots']} price snapshots")
     yield
+    logger.info("Shutting down")
 
-    # Shutdown
-    scheduler.shutdown()
-    logger.info("Scheduler stopped")
-
-
-# ── APP ────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="CS2 Market Intelligence",
@@ -70,11 +43,12 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,18 +56,24 @@ app.add_middleware(
 
 
 # ── ROUTES ─────────────────────────────────────────────────────────────────
+
 @app.get("/ui")
 async def serve_ui():
     return FileResponse("static/index.html")
+
+
 @app.get("/")
 def root():
-    return {"service": "CS2 Market Intelligence", "version": "1.0.0",
-            "docs": "/docs", "endpoints": ["/api/data", "/api/status", "/api/updates", "/api/prices/{skin}", "/api/correlations"]}
+    return {
+        "service": "CS2 Market Intelligence",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "endpoints": ["/api/data", "/api/status", "/api/updates", "/api/prices/{skin}", "/api/correlations", "/api/spreads", "/api/reddit"],
+    }
 
 
 @app.get("/api/data")
 def api_data():
-    """Full data export for the dashboard frontend."""
     try:
         return get_export_data()
     except Exception as e:
@@ -102,24 +82,17 @@ def api_data():
 
 @app.get("/api/status")
 def api_status():
-    """Database stats and health check."""
     try:
-        status = get_status()
-        status["scheduler_running"] = scheduler.running
-        jobs = scheduler.get_jobs()
-        status["next_scrape"] = str(jobs[0].next_run_time) if jobs else None
-        return status
+        return get_status()
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 
 
 @app.get("/api/updates")
 def api_updates(category: str = None, limit: int = 50):
-    """List updates, optionally filtered by category."""
     db = get_db()
     rows = db.execute("SELECT * FROM updates ORDER BY timestamp DESC LIMIT ?", (limit,)).fetchall()
     db.close()
-
     updates = []
     for row in rows:
         cats = json.loads(row["categories"])
@@ -135,10 +108,7 @@ def api_updates(category: str = None, limit: int = 50):
 
 @app.get("/api/prices/{skin}")
 def api_price_history(skin: str, days: int = 90):
-    """Price history for a specific skin."""
-    # URL-decode common patterns
     skin = skin.replace("_", " ").replace("%7C", "|")
-
     db = get_db()
     rows = db.execute("""
         SELECT substr(date,1,10) as day, AVG(lowest_price) as avg_low,
@@ -147,59 +117,44 @@ def api_price_history(skin: str, days: int = 90):
         GROUP BY day ORDER BY day DESC LIMIT ?
     """, (skin, days)).fetchall()
     db.close()
-
     if not rows:
         raise HTTPException(404, detail=f"No price data for '{skin}'")
-
     return {
         "skin": skin,
         "history": [{"date": r["day"],
-                      "low": round(r["avg_low"], 2) if r["avg_low"] else None,
-                      "med": round(r["avg_med"], 2) if r["avg_med"] else None,
-                      "vol": r["max_vol"]} for r in reversed(rows)],
+                     "low": round(r["avg_low"], 2) if r["avg_low"] else None,
+                     "med": round(r["avg_med"], 2) if r["avg_med"] else None,
+                     "vol": r["max_vol"]} for r in reversed(rows)],
         "points": len(rows),
     }
 
 
 @app.get("/api/correlations")
 def api_correlations():
-    """
-    Compute update → price impact correlations.
-    For each update, compare avg price 1 day before vs 3 days after.
-    """
     db = get_db()
-
-    updates = []
-    for row in db.execute("SELECT * FROM updates ORDER BY timestamp"):
-        updates.append({
-            "id": row["id"], "title": row["title"], "date": row["date"],
-            "timestamp": row["timestamp"],
-            "categories": json.loads(row["categories"]),
-            "weapons": json.loads(row["weapons"]),
-        })
-
+    updates = [
+        {"id": r["id"], "title": r["title"], "date": r["date"],
+         "timestamp": r["timestamp"],
+         "categories": json.loads(r["categories"]),
+         "weapons": json.loads(r["weapons"])}
+        for r in db.execute("SELECT * FROM updates ORDER BY timestamp")
+    ]
     results = []
     for update in updates:
         ts = update["timestamp"]
-        # Get avg price across all skins 1 day before
         before = db.execute("""
             SELECT AVG(median_price) as avg_price FROM price_snapshots
             WHERE timestamp BETWEEN ? AND ?
-        """, (ts - 172800, ts - 3600)).fetchone()  # 2 days to 1 hour before
-
-        # Get avg price 2-4 days after
+        """, (ts - 172800, ts - 3600)).fetchone()
         after = db.execute("""
             SELECT AVG(median_price) as avg_price FROM price_snapshots
             WHERE timestamp BETWEEN ? AND ?
-        """, (ts + 43200, ts + 345600)).fetchone()  # 12h to 4 days after
-
+        """, (ts + 43200, ts + 345600)).fetchone()
         if before["avg_price"] and after["avg_price"] and before["avg_price"] > 0:
             pct = round(((after["avg_price"] - before["avg_price"]) / before["avg_price"]) * 100, 2)
             results.append({**update, "avg_impact": pct})
-
     db.close()
 
-    # Aggregate by category
     cat_agg = {}
     for r in results:
         for cat in r["categories"]:
@@ -207,38 +162,26 @@ def api_correlations():
                 cat_agg[cat] = {"impacts": [], "count": 0}
             cat_agg[cat]["impacts"].append(r["avg_impact"])
             cat_agg[cat]["count"] += 1
-
     for cat, data in cat_agg.items():
         arr = data["impacts"]
         data["mean"] = round(sum(arr) / len(arr), 2)
         data["min"] = round(min(arr), 2)
         data["max"] = round(max(arr), 2)
-        if len(arr) > 1:
-            mean = data["mean"]
-            data["std"] = round((sum((x - mean) ** 2 for x in arr) / len(arr)) ** 0.5, 2)
-        else:
-            data["std"] = 0
-        del data["impacts"]  # don't send raw array
+        data["std"] = round((sum((x - data["mean"]) ** 2 for x in arr) / len(arr)) ** 0.5, 2) if len(arr) > 1 else 0
+        del data["impacts"]
 
-    return {
-        "correlations": results,
-        "by_category": cat_agg,
-        "total": len(results),
-    }
+    return {"correlations": results, "by_category": cat_agg, "total": len(results)}
 
 
 @app.get("/api/spreads")
 def api_spreads():
-    """Latest cross-platform spread opportunities."""
     db = get_db()
     latest_ts = db.execute("SELECT MAX(timestamp) FROM spreads").fetchone()[0]
     if not latest_ts:
         db.close()
         return {"spreads": [], "as_of": None}
-
     rows = db.execute("SELECT * FROM spreads WHERE timestamp=? ORDER BY best_profit DESC", (latest_ts,)).fetchall()
     db.close()
-
     return {
         "spreads": [{
             "skin": r["skin_name"], "steam_buy": r["steam_buy"], "steam_sell": r["steam_sell"],
@@ -252,7 +195,6 @@ def api_spreads():
 
 @app.get("/api/reddit")
 def api_reddit(limit: int = 20):
-    """Latest Reddit community posts."""
     db = get_db()
     rows = db.execute("SELECT * FROM reddit_posts ORDER BY date DESC LIMIT ?", (limit,)).fetchall()
     db.close()
@@ -263,13 +205,13 @@ def api_reddit(limit: int = 20):
 
 @app.post("/api/scrape")
 def api_scrape(background_tasks: BackgroundTasks):
-    """Trigger a scrape cycle (runs in background)."""
+    """Trigger a full scrape cycle (runs in background)."""
     background_tasks.add_task(cmd_scrape)
     return {"status": "started", "message": "Scrape running in background"}
 
 
 @app.post("/api/backfill")
 def api_backfill(background_tasks: BackgroundTasks):
-    """Trigger news backfill (runs in background)."""
+    """Trigger news + price history backfill (runs in background)."""
     background_tasks.add_task(cmd_backfill)
     return {"status": "started", "message": "Backfilling ~6 months of news in background"}
