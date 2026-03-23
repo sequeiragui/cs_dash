@@ -4,6 +4,7 @@ CS2 Market Intelligence — Scraper Module
 Importable scraper functions for use by FastAPI + APScheduler.
 Also runnable standalone: python scraper.py [--backfill|--status|--export]
 """
+import os
 
 import re
 import sys
@@ -51,6 +52,12 @@ TRACKED_SKINS = [
 
 STEAM_FEE = 0.15
 SKINPORT_FEE = 0.13
+
+# Steam login cookie — needed for price history backfill
+# Get it from your browser: open Steam Community Market while logged in,
+# DevTools → Application → Cookies → steamLoginSecure
+# Set via env var or paste here
+STEAM_COOKIE = os.environ.get("STEAM_COOKIE", "")
 
 CATEGORY_RULES = [
     ("new_case",         ["new case", "case release", "introducing the", "case is now", "case has been"]),
@@ -280,6 +287,136 @@ def scrape_steam_prices():
     return results
 
 
+def scrape_price_history(days_back=180):
+    """
+    Backfill historical prices using Steam's /market/pricehistory/ endpoint.
+    Requires a steamLoginSecure cookie. Returns daily median prices + volume
+    going back months/years.
+
+    How to get your cookie:
+      1. Log into steamcommunity.com in your browser
+      2. Open DevTools → Application → Cookies → steamcommunity.com
+      3. Copy the value of 'steamLoginSecure'
+      4. Set it: export STEAM_COOKIE="your_cookie_value"
+    """
+    if not STEAM_COOKIE:
+        log("!! No STEAM_COOKIE set — can't backfill price history")
+        log("   Get it from browser DevTools → Cookies → steamLoginSecure", 1)
+        return {}
+
+    cookies = {"steamLoginSecure": STEAM_COOKIE}
+    all_history = {}
+
+    for skin in TRACKED_SKINS:
+        try:
+            url = "https://steamcommunity.com/market/pricehistory/"
+            params = {"appid": 730, "market_hash_name": skin}
+            r = requests.get(url, params=params, headers=HEADERS, cookies=cookies, timeout=15)
+
+            if r.status_code == 400:
+                log("!! Steam cookie expired — re-login and update STEAM_COOKIE")
+                return all_history
+
+            if r.status_code == 429:
+                log("Rate limited — waiting 60s", 2)
+                time.sleep(60)
+                r = requests.get(url, params=params, headers=HEADERS, cookies=cookies, timeout=15)
+
+            r.raise_for_status()
+            data = r.json()
+
+            if not data.get("success"):
+                log(f"!! {skin}: API returned success=false", 2)
+                continue
+
+            raw_prices = data.get("prices", [])
+            if not raw_prices:
+                log(f"!! {skin}: No price data returned (cookie may be invalid)", 2)
+                continue
+
+            log(f"   {skin[:30]}: {len(raw_prices)} raw entries from Steam", 2)
+
+            # prices format: ["MMM DD YYYY HH: +0", median_price, "volume"]
+            # Aggregate to daily
+            daily = {}
+            for entry in raw_prices:
+                try:
+                    date_str = entry[0]
+                    price = float(entry[1])
+                    volume = int(str(entry[2]).replace(",", "")) if len(entry) > 2 else 0
+
+                    # Robust date parse — extract "Mon DD YYYY" from various formats
+                    # Examples: "Mar 18 2026 01: +0", "Mar  8 2026 01: +0"
+                    match = re.match(r"(\w{3})\s+(\d{1,2})\s+(\d{4})", date_str)
+                    if not match:
+                        continue
+                    month, day_num, year = match.groups()
+                    dt = datetime.strptime(f"{month} {day_num} {year}", "%b %d %Y")
+                    day = dt.strftime("%Y-%m-%d")
+
+                    if day not in daily:
+                        daily[day] = {"prices": [], "volumes": []}
+                    daily[day]["prices"].append(price)
+                    daily[day]["volumes"].append(volume)
+                except (ValueError, IndexError, TypeError):
+                    continue
+
+            # Compute daily median
+            if not daily:
+                continue
+
+            history = []
+            cutoff = datetime.now(timezone.utc).timestamp() - (days_back * 86400)
+            for day, d in sorted(daily.items()):
+                day_ts = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+                if day_ts < cutoff:
+                    continue
+                prices = sorted(d["prices"])
+                median = prices[len(prices) // 2]
+                total_vol = sum(d["volumes"])
+                history.append({
+                    "date": day,
+                    "median_price": round(median, 2),
+                    "volume": total_vol,
+                })
+
+            all_history[skin] = history
+            short = skin.split("|")[1].split("(")[0].strip() if "|" in skin else skin
+            log(f"→ {short}: {len(history)} days of history", 2)
+
+        except Exception as e:
+            log(f"!! {skin}: {e}", 2)
+
+        time.sleep(3)  # be gentle — ~20 req/min limit
+
+    return all_history
+
+
+def store_price_history(db, history):
+    """Store backfilled price history into price_snapshots table."""
+    inserted = 0
+    for skin, days in history.items():
+        for day in days:
+            ts = int(datetime.strptime(day["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+
+            # Skip if we already have data for this skin+day
+            existing = db.execute(
+                "SELECT 1 FROM price_snapshots WHERE skin_name=? AND substr(date,1,10)=? LIMIT 1",
+                (skin, day["date"])
+            ).fetchone()
+            if existing:
+                continue
+
+            db.execute(
+                "INSERT INTO price_snapshots (skin_name, source, lowest_price, median_price, volume, timestamp, date) VALUES (?, 'steam_history', ?, ?, ?, ?, ?)",
+                (skin, day["median_price"], day["median_price"], str(day["volume"]), ts, day["date"])
+            )
+            inserted += 1
+
+    db.commit()
+    return inserted
+
+
 def scrape_skinport():
     try:
         r = requests.get("https://api.skinport.com/v1/items",
@@ -433,14 +570,27 @@ def cmd_scrape():
 
 
 def cmd_backfill():
-    """Backfill ~6 months of news history."""
+    """Backfill ~6 months of news + price history."""
     init_db()
     db = get_db()
+
+    # 1. News backfill
     log("Backfilling ~6 months of news...")
     news = scrape_steam_news_backfill(months=6)
     new = store_updates(db, news)
     total = db.execute("SELECT COUNT(*) FROM updates").fetchone()[0]
-    log(f"Done: {len(news)} unique, {new} new, {total} total")
+    log(f"News: {len(news)} unique, {new} new, {total} total")
+
+    # 2. Price history backfill (needs STEAM_COOKIE)
+    log("\nBackfilling price history...")
+    history = scrape_price_history(days_back=180)
+    if history:
+        inserted = store_price_history(db, history)
+        total_prices = db.execute("SELECT COUNT(*) FROM price_snapshots").fetchone()[0]
+        log(f"Prices: {inserted} new data points, {total_prices} total")
+    else:
+        log("No price history (set STEAM_COOKIE env var to enable)")
+
     db.close()
 
 
